@@ -11,7 +11,11 @@ class PopOutState:
     # 0 simboliza o espaço vazio
     def __init__(self):
         self.board = np.zeros((6, 7), dtype=int)
-        self.current_player = '1' 
+        self.current_player = '1'
+        self.last_move_type = None
+        self.last_move_row = None
+        self.last_move_col = None
+        self.last_mover = None
 
     #Checa se a coluna escolhida pode ser preenchida
     def is_valid_drop(self, column):
@@ -20,9 +24,14 @@ class PopOutState:
     #adiciona a peça do jogador atual na coluna
     def apply_drop(self, column):
         if self.is_valid_drop(column):
+            mover = self.current_player
             for i in range(5, -1, -1):
                 if self.board[i][column] == 0:
-                    self.board[i][column] = int(self.current_player)
+                    self.board[i][column] = int(mover)
+                    self.last_move_type = 'drop'
+                    self.last_move_row = i
+                    self.last_move_col = column
+                    self.last_mover = mover
                     self.current_player = '2' if self.current_player == '1' else '1'
                     return True
         return False
@@ -32,43 +41,61 @@ class PopOutState:
     def is_valid_pop(self, column):
         return self.board[5][column] != 0
         
-    #Aplica o pop
+    #Aplica o pop se a peça na base da coluna for do jogador atual
     def apply_pop(self, column):
         if self.is_valid_pop(column):
-            if self.board[5][column] == int(self.current_player):
-                self.board[5][column] = 0
+            mover = self.current_player
+            if self.board[5][column] == int(mover):
+                for row in range(5, 0, -1):
+                    self.board[row][column] = self.board[row - 1][column]
+                self.board[0][column] = 0
+                self.last_move_type = 'pop'
+                self.last_move_row = None
+                self.last_move_col = column
+                self.last_mover = mover
                 self.current_player = '2' if self.current_player == '1' else '1'
                 return True
         return False
 
-    #checa se houve vitoria
-    def check_win(self, player):
-        player_id = int(player)
-        
-        # Checa a horizontal
+    def _has_four(self, player_id):
+        # horizontal
         for row in range(6):
             for col in range(4):
                 if all(self.board[row][col + i] == player_id for i in range(4)):
                     return True
-        
-        # Checa a vertical
-        for col in range(7):
-            for row in range(3):
+
+        # vertical
+        for row in range(3):
+            for col in range(7):
                 if all(self.board[row + i][col] == player_id for i in range(4)):
                     return True
-        
-        # Checa a primeira diagonal
+
+        # diagonal principal
         for row in range(3):
             for col in range(4):
                 if all(self.board[row + i][col + i] == player_id for i in range(4)):
                     return True
-        
-        # Checa a segunda diagonal
+
+        # diagonal secundaria
         for row in range(3):
             for col in range(3, 7):
                 if all(self.board[row + i][col - i] == player_id for i in range(4)):
                     return True
-        
+
         return False
+
+    # checa vitoria no tabuleiro inteiro
+    def check_win(self, player):
+        player_id = int(player)
+        other_id = 1 if player_id == 2 else 2
+
+        player_has_four = self._has_four(player_id)
+        other_has_four = self._has_four(other_id)
+
+        # regra do PopOut: em caso de vitoria simultanea apos pop, vence quem jogou
+        if self.last_move_type == 'pop' and player_has_four and other_has_four:
+            return str(player) == self.last_mover
+
+        return player_has_four
 
 
