@@ -16,6 +16,19 @@ class PopOutState:
         self.last_move_row = None
         self.last_move_col = None
         self.last_mover = None
+        self.is_draw = False
+        self.draw_reason = None
+        self.position_counts = {}
+
+    def _state_key(self):
+        # isto aqui vai servir depois para ver se o mesmo estado ja apareceu varias vezes
+        # a ideia e guardar o tabuleiro + o jogador que vai jogar
+        # nao tenho a certeza ainda se isto vai ficar assim mesmo, mas ja deixa o caminho feito
+        board_key = self.board.tobytes()
+        player_key = self.current_player
+
+        
+        return (board_key, player_key)
 
     #Checa se a coluna escolhida pode ser preenchida
     def is_valid_drop(self, column):
@@ -39,7 +52,7 @@ class PopOutState:
     
     #Checa se é possivel aplicar pop (remover a peça do jogador na base da coluna)
     def is_valid_pop(self, column):
-        return self.board[5][column] != 0
+        return self.board[5][column] == int(self.current_player)
         
     #Aplica o pop se a peça na base da coluna for do jogador atual
     def apply_pop(self, column):
