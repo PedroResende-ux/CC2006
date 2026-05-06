@@ -19,16 +19,26 @@ class PopOutState:
         self.is_draw = False
         self.draw_reason = None
         self.position_counts = {}
+        self._update_position_count() # Register the initial board state
 
     def _state_key(self):
         # isto aqui vai servir depois para ver se o mesmo estado ja apareceu varias vezes
         # a ideia e guardar o tabuleiro + o jogador que vai jogar
-        # nao tenho a certeza ainda se isto vai ficar assim mesmo, mas ja deixa o caminho feito
-        board_key = self.board.tobytes()
+        
+        # FIX: Convert numpy array to a hashable tuple of tuples
+        board_key = tuple(tuple(row) for row in self.board)
         player_key = self.current_player
-
         
         return (board_key, player_key)
+
+    def _update_position_count(self):
+        # Updates the count of the current state to check for 3-fold repetition
+        key = self._state_key()
+        self.position_counts[key] = self.position_counts.get(key, 0) + 1
+        
+        if self.position_counts[key] >= 3:
+            self.is_draw = True
+            self.draw_reason = "3-fold repetition"
 
     #Checa se a coluna escolhida pode ser preenchida
     def is_valid_drop(self, column):
@@ -46,10 +56,10 @@ class PopOutState:
                     self.last_move_col = column
                     self.last_mover = mover
                     self.current_player = '2' if self.current_player == '1' else '1'
+                    self._update_position_count() # Register new state
                     return True
         return False
 
-    
     #Checa se é possivel aplicar pop (remover a peça do jogador na base da coluna)
     def is_valid_pop(self, column):
         return self.board[5][column] == int(self.current_player)
@@ -67,6 +77,7 @@ class PopOutState:
                 self.last_move_col = column
                 self.last_mover = mover
                 self.current_player = '2' if self.current_player == '1' else '1'
+                self._update_position_count() # Register new state
                 return True
         return False
 
@@ -111,4 +122,9 @@ class PopOutState:
 
         return player_has_four
 
+    def is_board_full(self):
+        return not any(self.board[0][col] == 0 for col in range(7))
 
+    def declare_draw(self, reason="Draw declared by player"):
+        self.is_draw = True
+        self.draw_reason = reason
