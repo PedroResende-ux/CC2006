@@ -1,5 +1,21 @@
-.DS_Store
+# Python
 __pycache__/
 *.pyc
+
+# pytest
+.pytest_cache/
+
+# Numba JIT cache
+*.nbi
+*.nbc
+
+# Jupyter
 .ipynb_checkpoints/
-.env
+
+# Generated datasets (regenerable via scripts/generate_dataset.py)
+data/*.csv
+!data/iris.csv
+
+# Claude Code local config and internal spec
+.claude/
+CLAUDE.md
