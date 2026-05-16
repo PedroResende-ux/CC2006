@@ -134,6 +134,7 @@ class MCTSNode:
         "untried_moves",
         "visits",
         "value_sum",
+        "value_sum_sq",
         "terminal",
         "undet_children",
         "root_player",
@@ -152,6 +153,7 @@ class MCTSNode:
         self.children: list[MCTSNode] = []
         self.visits: int = 0
         self.value_sum: float = 0.0
+        self.value_sum_sq: float = 0.0
         self.root_player = root_player
 
         # Determine terminal status and cache valid moves only once.
@@ -212,6 +214,19 @@ class MCTS:
     UCT scoring uses ``child.value_sum / child.visits`` directly, as
     specified. Reward accounting is fixed to the root player's
     perspective and never flipped during back-propagation.
+
+    The ``num_children_to_expand`` parameter controls how many children are
+    created per visit to a fully-unexpanded node: ``1`` reproduces the
+    standard MCTS behaviour, higher values create up to ``k`` children in
+    one ``_expand`` call (capped by the remaining ``untried_moves``).
+
+    The ``uct_variant`` parameter selects the selection formula:
+
+    * ``"ucb1"`` (default) — classic UCT with a constant exploration weight.
+    * ``"ucb1_tuned"`` — variance-aware bound of Auer, Cesa-Bianchi &
+      Fischer (2002). The ``exploration_weight`` argument is ignored in
+      this mode; the exploration term scales with the empirical reward
+      variance instead.
     """
 
     def __init__(
@@ -221,6 +236,8 @@ class MCTS:
         rollout_depth_limit: int = 80,
         random_seed: Optional[int] = None,
         use_numba_rollout: bool = True,
+        num_children_to_expand: int = 1,
+        uct_variant: str = "ucb1",
     ) -> None:
         if iterations < 1:
             raise ValueError("iterations must be at least 1")
@@ -228,12 +245,20 @@ class MCTS:
             raise ValueError("exploration_weight must be non-negative")
         if rollout_depth_limit < 0:
             raise ValueError("rollout_depth_limit must be non-negative")
+        if num_children_to_expand < 1:
+            raise ValueError("num_children_to_expand must be >= 1")
+        if uct_variant not in ("ucb1", "ucb1_tuned"):
+            raise ValueError(
+                f"uct_variant must be 'ucb1' or 'ucb1_tuned', got {uct_variant!r}"
+            )
 
         self.iterations: int = iterations
         self.exploration_weight: float = exploration_weight
         self.rollout_depth_limit: int = rollout_depth_limit
         self._rng: random.Random = random.Random(random_seed)
         self._use_numba_rollout: bool = use_numba_rollout
+        self.num_children_to_expand: int = num_children_to_expand
+        self.uct_variant: str = uct_variant
         # Set per-search; exposed for tests that want to inspect the tree.
         self._last_root: Optional[MCTSNode] = None
         self._root_player: int = 0
@@ -341,37 +366,81 @@ class MCTS:
             )
 
     def _expand(self, node: MCTSNode) -> MCTSNode:
-        """Create one new child of ``node`` from a random untried move.
+        """Create up to ``self.num_children_to_expand`` new children of ``node``.
 
-        If the resulting child's state is terminal we mark its proven
-        value, run a single back-propagation pass so visit counts reflect
-        the proof, decrement the parent's ``undet_children`` counter and
-        attempt a terminal propagation upwards.
+        With ``num_children_to_expand == 1`` exactly one child is created,
+        reproducing the standard MCTS behaviour. With ``k > 1`` we create
+        ``min(k, len(node.untried_moves))`` children in a single call. Each
+        untried move is popped at a uniformly random index so UCT's
+        unbiased exploration is preserved.
+
+        For every child created we apply the same per-child logic as the
+        single-expansion case: if the child's state is terminal at birth
+        we back-propagate its proven value, decrement
+        ``node.undet_children``, and attempt a terminal propagation
+        upwards. If that propagation resolves ``node`` itself (because a
+        forcing child was found) the loop stops — any further children
+        would be wasted work in an already-decided subtree.
+
+        Returns the first newly-created child that is not terminal-at-birth
+        (so the caller can run a rollout from it). If every created child
+        was terminal at birth, the last one is returned; its statistics
+        have already been propagated by ``_backpropagate`` above and the
+        caller's terminal-leaf branch will short-circuit the rollout.
         """
-        # Random pop preserves UCT's unbiased exploration even when a
-        # node has many untried moves.
-        idx = self._rng.randrange(len(node.untried_moves))
-        move = node.untried_moves.pop(idx)
+        if not node.untried_moves:
+            # Defensive: nothing to expand. The search loop handles a
+            # leaf with no rollout to do (terminal or no-children) without
+            # crashing.
+            return node
 
-        child_state = node.state.clone()
-        child_state.make_move(*move)
-        child = MCTSNode(
-            state=child_state,
-            parent=node,
-            move=move,
-            root_player=self._root_player,
-        )
-        node.children.append(child)
+        k = self.num_children_to_expand
+        created: list[MCTSNode] = []
+        first_undetermined: Optional[MCTSNode] = None
 
-        if child.terminal != TERMINAL_UNDETERMINED:
-            # Resolved at birth — propagate the proof through the stats and
-            # update the parent's outstanding-children counter.
-            self._backpropagate(child, child.terminal)
-            node.undet_children -= 1
-            self._try_resolve(node)
-        # If undetermined: untried_moves dropped by 1 and "undetermined
-        # children" grew by 1, so the parent's counter is unchanged.
-        return child
+        for _ in range(k):
+            if not node.untried_moves:
+                break
+
+            # Random pop preserves UCT's unbiased exploration even when a
+            # node has many untried moves.
+            idx = self._rng.randrange(len(node.untried_moves))
+            move = node.untried_moves.pop(idx)
+
+            child_state = node.state.clone()
+            child_state.make_move(*move)
+            child = MCTSNode(
+                state=child_state,
+                parent=node,
+                move=move,
+                root_player=self._root_player,
+            )
+            node.children.append(child)
+            created.append(child)
+
+            if child.terminal != TERMINAL_UNDETERMINED:
+                # Resolved at birth — propagate the proof through the stats
+                # and update the parent's outstanding-children counter.
+                self._backpropagate(child, child.terminal)
+                node.undet_children -= 1
+                self._try_resolve(node)
+            else:
+                # If undetermined: untried_moves dropped by 1 and
+                # "undetermined children" grew by 1, so the parent's counter
+                # is unchanged.
+                if first_undetermined is None:
+                    first_undetermined = child
+
+            # If a forcing child resolved ``node`` itself, further expansion
+            # would only waste work on a now-decided subtree.
+            if node.terminal != TERMINAL_UNDETERMINED:
+                break
+
+        if first_undetermined is not None:
+            return first_undetermined
+        # All created children were terminal at birth; their stats were
+        # already propagated, so the caller will skip the rollout.
+        return created[-1]
 
     def _simulate(self, state: PopOutBoard) -> float:
         """Play random moves from ``state`` and return a root-perspective reward.
@@ -430,12 +499,16 @@ class MCTS:
         """Walk from ``node`` to the root adding ``reward`` to every ancestor.
 
         ``reward`` is always expressed in the root player's perspective
-        (per :class:`MCTS` docs); we never flip its sign.
+        (per :class:`MCTS` docs); we never flip its sign. The squared
+        reward is accumulated alongside the running sum so UCB1-Tuned can
+        recover the empirical variance in one O(1) step.
         """
+        reward_sq = reward * reward
         current: Optional[MCTSNode] = node
         while current is not None:
             current.visits += 1
             current.value_sum += reward
+            current.value_sum_sq += reward_sq
             current = current.parent
 
     # ------------------------------------------------------------------
@@ -499,18 +572,48 @@ class MCTS:
         Rewards are stored in the root player's perspective. When the parent
         node is at the opponent's turn, the opponent maximises its own reward,
         which is ``1 - mean`` in the root-perspective accounting. The
-        exploration term is symmetric and never flipped.
+        exploration term is symmetric and never flipped, regardless of
+        variant.
+
+        Dispatches on ``self.uct_variant``:
+
+        * ``"ucb1"`` — classic UCT with the constant exploration weight
+          ``self.exploration_weight``.
+        * ``"ucb1_tuned"`` — variance-aware bound of Auer, Cesa-Bianchi &
+          Fischer (2002). The exploration term scales with the empirical
+          variance of the child's rewards, clamped above by ``1/4`` (the
+          theoretical maximum variance of a reward in ``[0, 1]``). The
+          ``exploration_weight`` argument is ignored in this mode.
         """
         if child.visits == 0:
             return math.inf
+
         mean = child.value_sum / child.visits
         if parent.state.current_player == parent.root_player:
             exploitation = mean
         else:
             exploitation = 1.0 - mean
-        exploration = self.exploration_weight * math.sqrt(
-            math.log(parent.visits) / child.visits
-        )
+
+        log_parent_visits = math.log(parent.visits)
+
+        if self.uct_variant == "ucb1":
+            exploration = self.exploration_weight * math.sqrt(
+                log_parent_visits / child.visits
+            )
+        else:  # "ucb1_tuned"
+            # Empirical variance of the child's rewards (clamped non-negative
+            # to absorb floating-point noise from very small values).
+            mean_sq = child.value_sum_sq / child.visits
+            variance = max(0.0, mean_sq - mean * mean)
+            # Variance bound term from the paper.
+            v_bound = variance + math.sqrt(
+                2.0 * log_parent_visits / child.visits
+            )
+            # The 1/4 cap reflects the maximum variance of a reward in [0, 1].
+            exploration = math.sqrt(
+                log_parent_visits / child.visits * min(0.25, v_bound)
+            )
+
         return exploitation + exploration
 
     def _best_move(self, root: MCTSNode) -> Move:

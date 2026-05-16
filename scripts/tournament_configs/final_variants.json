@@ -1,0 +1,22 @@
+{
+  "default_games": 100,
+  "matchups": [
+    {
+      "name": "ucb1_optimal_vs_ucb1_tuned_optimal",
+      "player_a": {
+        "iterations": 20000,
+        "exploration_weight": 2.0,
+        "rollout_depth_limit": 80,
+        "num_children_to_expand": 1,
+        "uct_variant": "ucb1"
+      },
+      "player_b": {
+        "iterations": 20000,
+        "exploration_weight": 2.0,
+        "rollout_depth_limit": 80,
+        "num_children_to_expand": 1,
+        "uct_variant": "ucb1_tuned"
+      }
+    }
+  ]
+}

@@ -7,7 +7,6 @@ exploration moves are used to diversify the state distribution but never
 labelled.
 
 Usage examples:
-    python -m scripts.generate_dataset --smoke
     python -m scripts.generate_dataset --games 10000 --iterations 5000 \\
         --workers 16 --out data/popout_50k.csv
 """
@@ -21,7 +20,6 @@ import math
 import multiprocessing as mp
 import os
 import random
-import re
 import sys
 import time
 from dataclasses import dataclass
@@ -39,6 +37,19 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from ai.mcts import MCTS  # noqa: E402
 from game.board import COLS, ROWS, PopOutBoard  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# Hardcoded knobs
+# ---------------------------------------------------------------------------
+
+# Validated MCTS rollout depth cap. Matches the value used in all
+# tournament experiments (scripts/tournament_configs/*.json). Not exposed
+# via CLI because we never vary it.
+ROLLOUT_DEPTH_LIMIT = 80
+
+# How often the parent prints progress (in completed games).
+PROGRESS_EVERY = 50
 
 
 # ---------------------------------------------------------------------------
@@ -72,13 +83,17 @@ class GenConfig:
 
     games: int
     iterations: int
+    exploration_weight: float
+    num_children_to_expand: int
+    uct_variant: str
     workers: int
     eps: float
     opening_max: int
     depth_limit: int
     base_seed: int
+    start_game: int
+    end_game: int
     out_path: Path
-    smoke: bool
     progress_every_games: int
 
 
@@ -157,8 +172,10 @@ def play_one_game(args: tuple[int, GenConfig]) -> tuple[int, list[tuple]]:
 
     mcts = MCTS(
         iterations=cfg.iterations,
-        exploration_weight=math.sqrt(2),
+        exploration_weight=cfg.exploration_weight,
         rollout_depth_limit=cfg.depth_limit,
+        num_children_to_expand=cfg.num_children_to_expand,
+        uct_variant=cfg.uct_variant,
         random_seed=seed,
     )
 
@@ -261,10 +278,11 @@ def _run_pool(cfg: GenConfig, append: bool) -> tuple[int, float]:
     f, writer = _open_output(cfg, append)
     started = time.monotonic()
     total_rows = 0
-    next_emit = 0
+    next_emit = cfg.start_game
     pending: dict[int, list[tuple]] = {}
 
-    work = [(i, cfg) for i in range(cfg.games)]
+    total = cfg.end_game - cfg.start_game
+    work = [(i, cfg) for i in range(cfg.start_game, cfg.end_game)]
 
     try:
         with mp.Pool(processes=cfg.workers) as pool:
@@ -281,15 +299,15 @@ def _run_pool(cfg: GenConfig, append: bool) -> tuple[int, float]:
                     total_rows += len(out_rows)
                     next_emit += 1
                 done += 1
-                if done % cfg.progress_every_games == 0 or done == cfg.games:
+                if done % cfg.progress_every_games == 0 or done == total:
                     elapsed = time.monotonic() - started
                     rate = total_rows / elapsed if elapsed > 0 else 0.0
-                    pct = 100.0 * done / cfg.games
-                    remaining = cfg.games - done
+                    pct = 100.0 * done / total
+                    remaining = total - done
                     avg_per_game = elapsed / max(done, 1)
                     eta = _fmt_eta(remaining * avg_per_game)
                     print(
-                        f"[gen] {done}/{cfg.games} games ({pct:.1f}%) | "
+                        f"[gen] {done}/{total} games ({pct:.1f}%) | "
                         f"{total_rows} rows | {rate:.1f} rows/s | ETA {eta}",
                         file=sys.stderr,
                         flush=True,
@@ -299,94 +317,6 @@ def _run_pool(cfg: GenConfig, append: bool) -> tuple[int, float]:
 
     elapsed = time.monotonic() - started
     return total_rows, elapsed
-
-
-# ---------------------------------------------------------------------------
-# Smoke mode
-# ---------------------------------------------------------------------------
-
-
-_CLASS_RE = re.compile(r"^(drop|pop)_[0-6]$")
-_CELL_OK = {"0", "1", "2"}
-
-
-def _validate_smoke(path: Path) -> tuple[bool, str, int]:
-    """Validate a smoke-run CSV. Return (ok, message, n_rows)."""
-    if not path.exists():
-        return False, "smoke CSV was not produced", 0
-    with path.open("r", newline="") as f:
-        reader = csv.reader(f)
-        try:
-            header = next(reader)
-        except StopIteration:
-            return False, "smoke CSV is empty (no header)", 0
-        if header != HEADER:
-            return False, "header does not match schema", 0
-        rows = list(reader)
-    n = len(rows)
-    if n < 50:
-        return False, f"only {n} rows (expected >= 50)", n
-    expected_cols = len(HEADER)
-    for i, row in enumerate(rows):
-        if len(row) != expected_cols:
-            return False, f"row {i}: {len(row)} cols (expected {expected_cols})", n
-        for j in range(42):
-            v = row[j]
-            if v == "" or v.lower() == "nan":
-                return False, f"row {i}, cell {j}: empty/NaN", n
-            if v not in _CELL_OK:
-                return False, f"row {i}, cell {j}: bad value {v!r}", n
-        for j in range(42, expected_cols - 1):
-            v = row[j]
-            if v == "" or v.lower() == "nan":
-                return False, f"row {i}, col {HEADER[j]}: empty/NaN", n
-        cls = row[-1]
-        if not _CLASS_RE.match(cls):
-            return False, f"row {i}: bad class {cls!r}", n
-    return True, "ok", n
-
-
-def _run_smoke() -> int:
-    """Run a sanity-check batch and report PASS/FAIL. Returns exit code."""
-    cpu = os.cpu_count() or 1
-    tmp_name = f"_smoke_{int(time.time() * 1000)}.csv"
-    tmp_path = _PROJECT_ROOT / "data" / tmp_name
-    cfg = GenConfig(
-        games=100,
-        iterations=500,
-        workers=min(4, cpu),
-        eps=0.25,
-        opening_max=8,
-        depth_limit=80,
-        base_seed=0,
-        out_path=tmp_path,
-        smoke=True,
-        progress_every_games=25,
-    )
-    started = time.monotonic()
-    try:
-        total_rows, _ = _run_pool(cfg, append=False)
-    except SystemExit as exc:
-        print(f"[smoke] FAIL — {exc}", flush=True)
-        return 1
-    except Exception as exc:  # noqa: BLE001 — surface anything as smoke failure
-        print(f"[smoke] FAIL — {type(exc).__name__}: {exc}", flush=True)
-        return 1
-    elapsed = time.monotonic() - started
-
-    ok, msg, n = _validate_smoke(tmp_path)
-    if not ok:
-        print(f"[smoke] FAIL — {msg} (file kept at {tmp_path})", flush=True)
-        return 1
-    try:
-        tmp_path.unlink()
-    except OSError:
-        pass
-    print(
-        f"[smoke] PASS — {cfg.games} games, {n} rows, {elapsed:.1f}s",
-        flush=True,
-    )
-    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -400,17 +330,26 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Generate a PopOut self-play dataset via MCTS.",
     )
     p.add_argument("--games", type=int, default=None,
-                   help="total number of games to play (required unless --smoke)")
+                   help="total number of games to play (required unless --end-game)")
     p.add_argument("--iterations", type=int, default=5000,
                    help="MCTS iterations per labelled move")
+    p.add_argument("--exploration-weight", type=float, default=1.4142135624,
+                   help="MCTS UCT exploration constant (default: sqrt(2))")
+    p.add_argument("--num-children-to-expand", type=int, default=1,
+                   help="MCTS children expanded per _expand call (default: 1)")
+    p.add_argument("--uct-variant", type=str, default="ucb1",
+                   choices=["ucb1", "ucb1_tuned"],
+                   help="UCT formula variant (default: ucb1)")
+    p.add_argument("--start-game", type=int, default=0,
+                   help="first game_index to generate, inclusive (default: 0)")
+    p.add_argument("--end-game", type=int, default=None,
+                   help="last game_index, exclusive. If omitted, derived from --games")
     p.add_argument("--workers", type=int, default=None,
                    help="parallel worker processes (default: os.cpu_count())")
     p.add_argument("--eps", type=float, default=0.25,
                    help="probability of a random exploration move")
     p.add_argument("--opening-max", type=int, default=12,
                    help="maximum random opening plies, inclusive")
-    p.add_argument("--depth-limit", type=int, default=80,
-                   help="MCTS rollout depth cap")
     p.add_argument("--base-seed", type=int, default=0,
                    help="master seed for the run")
     p.add_argument(
@@ -421,28 +360,44 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--append", action="store_true",
                    help="append to existing CSV (after header verification)")
-    p.add_argument("--smoke", action="store_true",
-                   help="run a 100-game / 500-iter sanity batch and exit")
-    p.add_argument("--progress-every", type=int, default=50,
-                   help="print progress every N completed games")
     return p
 
 
 def _cfg_from_args(args: argparse.Namespace) -> GenConfig:
-    if args.games is None:
-        raise SystemExit("error: --games is required (or pass --smoke)")
-    if args.games < 1:
-        raise SystemExit("error: --games must be >= 1")
+    if args.end_game is None:
+        if args.games is None:
+            raise SystemExit("error: --games or --end-game is required")
+        if args.games < 1:
+            raise SystemExit("error: --games must be >= 1")
+        end_game = args.start_game + args.games
+        games = args.games
+    else:
+        if args.end_game <= args.start_game:
+            raise SystemExit(
+                f"error: --end-game ({args.end_game}) must be > --start-game ({args.start_game})"
+            )
+        end_game = args.end_game
+        games = end_game - args.start_game
+        if args.games is not None and args.games != games:
+            raise SystemExit(
+                f"error: --games ({args.games}) inconsistent with "
+                f"--start-game ({args.start_game}) and --end-game ({end_game}); "
+                f"implied games = {games}"
+            )
+
+    if args.start_game < 0:
+        raise SystemExit("error: --start-game must be >= 0")
+
     if not (0.0 <= args.eps <= 1.0):
         raise SystemExit("error: --eps must be in [0, 1]")
     if args.iterations < 1:
         raise SystemExit("error: --iterations must be >= 1")
     if args.opening_max < 0:
         raise SystemExit("error: --opening-max must be >= 0")
-    if args.depth_limit < 0:
-        raise SystemExit("error: --depth-limit must be >= 0")
-    if args.progress_every < 1:
-        raise SystemExit("error: --progress-every must be >= 1")
+    if args.num_children_to_expand < 1:
+        raise SystemExit("error: --num-children-to-expand must be >= 1")
+    if args.exploration_weight < 0:
+        raise SystemExit("error: --exploration-weight must be >= 0")
 
     cpu = os.cpu_count() or 1
     workers = args.workers if args.workers is not None else cpu
@@ -450,16 +405,20 @@ def _cfg_from_args(args: argparse.Namespace) -> GenConfig:
         raise SystemExit("error: --workers must be >= 1")
 
     return GenConfig(
-        games=args.games,
+        games=games,
         iterations=args.iterations,
+        exploration_weight=args.exploration_weight,
+        num_children_to_expand=args.num_children_to_expand,
+        uct_variant=args.uct_variant,
         workers=workers,
         eps=args.eps,
         opening_max=args.opening_max,
-        depth_limit=args.depth_limit,
+        depth_limit=ROLLOUT_DEPTH_LIMIT,
         base_seed=args.base_seed,
+        start_game=args.start_game,
+        end_game=end_game,
         out_path=Path(args.out),
-        smoke=False,
-        progress_every_games=args.progress_every,
+        progress_every_games=PROGRESS_EVERY,
     )
 
 
@@ -473,15 +432,13 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     args = _build_parser().parse_args(argv)
 
-    if args.smoke:
-        return _run_smoke()
-
     cfg = _cfg_from_args(args)
     total_rows, elapsed = _run_pool(cfg, append=args.append)
     rate = total_rows / elapsed if elapsed > 0 else 0.0
+    games = cfg.end_game - cfg.start_game
     print(
-        f"[gen] done — {cfg.games} games, {total_rows} rows in "
-        f"{elapsed:.1f}s ({rate:.1f} rows/s) -> {cfg.out_path}",
+        f"[gen] done — {games} games (indices {cfg.start_game}..{cfg.end_game - 1}), "
+        f"{total_rows} rows in {elapsed:.1f}s ({rate:.1f} rows/s) -> {cfg.out_path}",
         flush=True,
     )
     return 0

@@ -1,0 +1,73 @@
+{
+  "default_games": 100,
+  "matchups": [
+    {
+      "name": "c_0.1_vs_0.25",
+      "player_a": {
+        "iterations": 20000,
+        "exploration_weight": 0.1,
+        "rollout_depth_limit": 80,
+        "num_children_to_expand": 1,
+        "uct_variant": "ucb1"
+      },
+      "player_b": {
+        "iterations": 20000,
+        "exploration_weight": 0.25,
+        "rollout_depth_limit": 80,
+        "num_children_to_expand": 1,
+        "uct_variant": "ucb1"
+      }
+    },
+    {
+      "name": "c_0.25_vs_0.5",
+      "player_a": {
+        "iterations": 20000,
+        "exploration_weight": 0.25,
+        "rollout_depth_limit": 80,
+        "num_children_to_expand": 1,
+        "uct_variant": "ucb1"
+      },
+      "player_b": {
+        "iterations": 20000,
+        "exploration_weight": 0.5,
+        "rollout_depth_limit": 80,
+        "num_children_to_expand": 1,
+        "uct_variant": "ucb1"
+      }
+    },
+    {
+      "name": "c_0.5_vs_sqrt2",
+      "player_a": {
+        "iterations": 20000,
+        "exploration_weight": 0.5,
+        "rollout_depth_limit": 80,
+        "num_children_to_expand": 1,
+        "uct_variant": "ucb1"
+      },
+      "player_b": {
+        "iterations": 20000,
+        "exploration_weight": 1.4142135624,
+        "rollout_depth_limit": 80,
+        "num_children_to_expand": 1,
+        "uct_variant": "ucb1"
+      }
+    },
+    {
+      "name": "c_sqrt2_vs_2.0",
+      "player_a": {
+        "iterations": 20000,
+        "exploration_weight": 1.4142135624,
+        "rollout_depth_limit": 80,
+        "num_children_to_expand": 1,
+        "uct_variant": "ucb1"
+      },
+      "player_b": {
+        "iterations": 20000,
+        "exploration_weight": 2.0,
+        "rollout_depth_limit": 80,
+        "num_children_to_expand": 1,
+        "uct_variant": "ucb1"
+      }
+    }
+  ]
+}

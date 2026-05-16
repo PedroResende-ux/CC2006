@@ -15,6 +15,7 @@ __pycache__/
 # Generated datasets (regenerable via scripts/generate_dataset.py)
 data/*.csv
 !data/iris.csv
+data/_log_*.txt
 
 # Claude Code local config and internal spec
 .claude/

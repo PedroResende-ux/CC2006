@@ -348,3 +348,90 @@ def test_numba_rollout_is_at_least_5x_faster() -> None:
         f"speedup={speedup:.1f}x"
     )
     assert speedup >= 5.0, f"speedup {speedup:.2f}x < 5x"
+
+
+# ---------------------------------------------------------------------------
+# Tests for num_children_to_expand and uct_variant (Prompt E1)
+# ---------------------------------------------------------------------------
+
+
+def test_default_constructor_is_ucb1_with_one_expansion() -> None:
+    """Defaults preserve the standard MCTS configuration."""
+    m = MCTS(iterations=1)
+    assert m.num_children_to_expand == 1
+    assert m.uct_variant == "ucb1"
+
+
+def test_invalid_constructor_args_are_rejected() -> None:
+    with pytest.raises(ValueError):
+        MCTS(iterations=1, num_children_to_expand=0)
+    with pytest.raises(ValueError):
+        MCTS(iterations=1, uct_variant="random")
+
+
+def test_multi_expansion_creates_k_children() -> None:
+    """With k=7 on an empty board, one iteration should fully populate the root's children."""
+    m = MCTS(iterations=1, num_children_to_expand=7, random_seed=0)
+    m.search(PopOutBoard())
+    # The empty-board root has exactly 7 legal moves (no pops possible).
+    assert m._last_root is not None
+    assert len(m._last_root.children) == 7
+
+
+def test_ucb1_tuned_differs_from_ucb1_with_variance() -> None:
+    """When a child has high reward variance, the two formulas disagree."""
+    import math
+    from ai.mcts import MCTSNode
+
+    classic = MCTS(iterations=1, uct_variant="ucb1", exploration_weight=math.sqrt(2))
+    tuned = MCTS(iterations=1, uct_variant="ucb1_tuned")
+
+    parent = MCTSNode(state=PopOutBoard(), parent=None, move=None, root_player=PLAYER_1)
+    parent.visits = 100
+
+    child_state = PopOutBoard()
+    child_state.make_move("drop", 3)
+    child = MCTSNode(
+        state=child_state, parent=parent, move=("drop", 3), root_player=PLAYER_1,
+    )
+    # 10 visits, mean = 0.5, value_sum_sq = 5.0 -> variance = 0.5 - 0.25 = 0.25 (max).
+    child.visits = 10
+    child.value_sum = 5.0
+    child.value_sum_sq = 5.0
+
+    s_classic = classic._uct_score(child, parent)
+    s_tuned = tuned._uct_score(child, parent)
+    # Both should produce a finite score; they should NOT be equal.
+    assert math.isfinite(s_classic)
+    assert math.isfinite(s_tuned)
+    assert not math.isclose(s_classic, s_tuned, rel_tol=1e-6)
+
+
+def test_ucb1_tuned_with_zero_variance_has_smaller_exploration() -> None:
+    """A child with consistent rewards (zero variance) should get less exploration bonus
+    under UCB1-Tuned than under classic UCT (because the variance term is small)."""
+    import math
+    from ai.mcts import MCTSNode
+
+    classic = MCTS(iterations=1, uct_variant="ucb1", exploration_weight=math.sqrt(2))
+    tuned = MCTS(iterations=1, uct_variant="ucb1_tuned")
+
+    parent = MCTSNode(state=PopOutBoard(), parent=None, move=None, root_player=PLAYER_1)
+    parent.visits = 100
+
+    child_state = PopOutBoard()
+    child_state.make_move("drop", 3)
+    child = MCTSNode(
+        state=child_state, parent=parent, move=("drop", 3), root_player=PLAYER_1,
+    )
+    # 10 visits all returning 1.0: mean=1.0, value_sum_sq=10.0, variance=0.
+    child.visits = 10
+    child.value_sum = 10.0
+    child.value_sum_sq = 10.0
+
+    s_classic = classic._uct_score(child, parent)
+    s_tuned = tuned._uct_score(child, parent)
+    # Mean is the same (1.0); difference comes entirely from exploration.
+    exploration_classic = s_classic - 1.0
+    exploration_tuned = s_tuned - 1.0
+    assert exploration_tuned < exploration_classic

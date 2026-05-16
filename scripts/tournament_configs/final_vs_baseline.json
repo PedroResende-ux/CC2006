@@ -1,0 +1,39 @@
+{
+  "default_games": 100,
+  "matchups": [
+    {
+      "name": "ucb1_optimal_vs_baseline",
+      "player_a": {
+        "iterations": 20000,
+        "exploration_weight": 2.0,
+        "rollout_depth_limit": 80,
+        "num_children_to_expand": 1,
+        "uct_variant": "ucb1"
+      },
+      "player_b": {
+        "iterations": 5000,
+        "exploration_weight": 1.4142135624,
+        "rollout_depth_limit": 80,
+        "num_children_to_expand": 1,
+        "uct_variant": "ucb1"
+      }
+    },
+    {
+      "name": "ucb1_tuned_optimal_vs_baseline",
+      "player_a": {
+        "iterations": 20000,
+        "exploration_weight": 2.0,
+        "rollout_depth_limit": 80,
+        "num_children_to_expand": 1,
+        "uct_variant": "ucb1_tuned"
+      },
+      "player_b": {
+        "iterations": 5000,
+        "exploration_weight": 1.4142135624,
+        "rollout_depth_limit": 80,
+        "num_children_to_expand": 1,
+        "uct_variant": "ucb1"
+      }
+    }
+  ]
+}
