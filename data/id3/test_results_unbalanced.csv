@@ -1,0 +1,5 @@
+dataset,prune_mode,accuracy,macro_f1,pop_recall,top_3_accuracy,n_correct,n_total
+baseline,unpruned,0.493976,0.329107,0.482143,0.702065,618649,1252386
+baseline,pruned,0.494550,0.327788,0.456510,0.765803,619368,1252386
+optimised,unpruned,0.561598,0.361414,0.439830,0.735799,481332,857076
+optimised,pruned,0.552271,0.359131,0.412372,0.789987,473338,857076

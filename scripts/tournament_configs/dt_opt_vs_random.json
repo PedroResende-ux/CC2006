@@ -1,0 +1,15 @@
+{
+  "matchups": [
+    {
+      "games": 500,
+      "name": "dt_optimised_pruned_vs_random",
+      "player_a": {
+        "tree_pickle": "data/id3/id3_tree_optimised_pruned.pkl",
+        "type": "dt"
+      },
+      "player_b": {
+        "type": "random"
+      }
+    }
+  ]
+}

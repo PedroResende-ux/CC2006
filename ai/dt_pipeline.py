@@ -27,6 +27,7 @@ CLI::
 
 from __future__ import annotations
 
+import copy
 import os
 import pickle
 import sys
@@ -41,6 +42,7 @@ from ai.id3 import (
     id3,
     information_gain,
     predict,
+    predict_top_k,
     tree_depth,
 )
 
@@ -54,16 +56,25 @@ from ai.id3 import (
 # self-play dataset. Imported by :mod:`ai.dt_player` so train-time and
 # inference-time binning stay in sync.
 POPOUT_BIN_DEFINITIONS: dict = {
+    # ``move_count`` upper bound widened from 60 → 100: the dataset has rows
+    # up to move_count=68 (POP-heavy games), and values past the upper edge
+    # become NaN under ``pd.cut`` → the literal string ``"nan"`` after
+    # ``.astype(str)``, which the tree treated as a spurious fourth category.
     'move_count': {
-        'bins':   [-1, 10, 20, 30, 60],
+        'bins':   [-1, 10, 20, 30, 100],
         'labels': ['early', 'mid', 'late', 'endgame'],
     },
+    # Bottom-row piece-counts upper bound widened from 6 → 7: the board has
+    # seven columns, so a fully-occupied bottom row legitimately reaches 7.
+    # The previous upper bound of 6 collapsed that value to NaN/"nan" and
+    # the tree treated "endgame full bottom row" as an "unknown" category
+    # instead of the informative endgame signal it is.
     'own_pieces_bottom_row': {
-        'bins':   [-1, 1, 3, 6],
+        'bins':   [-1, 1, 3, 7],
         'labels': ['low', 'mid', 'high'],
     },
     'opp_pieces_bottom_row': {
-        'bins':   [-1, 1, 3, 6],
+        'bins':   [-1, 1, 3, 7],
         'labels': ['low', 'mid', 'high'],
     },
 }
@@ -88,6 +99,29 @@ def int_to_move(n: int) -> str:
     return f"pop_{n - 7}"
 
 
+def int_to_move_tuple(n: int) -> tuple[str, int]:
+    """Convert an integer class label (0–13) into a ``(kind, col)`` tuple.
+
+    Inverse of the encoding applied by
+    :func:`scripts.generate_dataset._row_from_decision`:
+    ``0..6`` decode to ``("drop", n)`` and ``7..13`` decode to
+    ``("pop", n - 7)``. Used by :class:`ai.dt_player.DTPlayer` to translate
+    a predicted leaf label back into the ``(move_type, col)`` tuple the
+    PopOut game loop expects.
+
+    Raises
+    ------
+    ValueError
+        If ``n`` is outside the valid 0..13 range.
+    """
+    n = int(n)
+    if not 0 <= n <= 13:
+        raise ValueError(f"class label out of range [0, 13]: {n}")
+    if n < 7:
+        return ("drop", n)
+    return ("pop", n - 7)
+
+
 def _move_to_int(x) -> int | None:
     """Inverse of :func:`int_to_move` with tolerance for raw int labels."""
     if pd.isna(x):
@@ -109,10 +143,23 @@ def _move_to_int(x) -> int | None:
 
 
 def run_iris_demo(csv_path: str | None = None) -> tuple[dict, float]:
-    """Run the ID3 warm-up on Iris (continuous → binary discretisation).
+    """Run the ID3 warm-up on Iris (continuous → quantile discretisation).
 
-    Uses the same :func:`ai.id3.id3` algorithm as the PopOut pipeline, after
-    discretising each feature via an information-gain-optimal binary split.
+    Each numeric feature is bucketised into four equal-frequency quantile
+    bins (``q1``..``q4``) before training. This replaces the previous
+    single-IG-threshold-per-feature scheme, which capped accuracy at
+    ~66.7% because it could perfectly separate setosa using either
+    ``petal_length`` or ``petal_width`` but reduced every other feature
+    to a binary indicator that could not distinguish versicolor from
+    virginica.
+
+    Why quantile binning rather than CART-style ``<= threshold`` splits:
+    extending :func:`ai.id3.id3` to support continuous numeric splits
+    would touch the selection rule and the recursion structure, both of
+    which the algorithm's invariants depend on. Pre-binning into four
+    quantile buckets is the cheapest fix that lifts accuracy above 90%
+    without changing :mod:`ai.id3` at all; the PopOut pipeline (which is
+    already categorical post-binning) is unaffected.
 
     Returns the trained tree and the test-set accuracy (%).
     """
@@ -141,25 +188,26 @@ def run_iris_demo(csv_path: str | None = None) -> tuple[dict, float]:
     print(f"Classes: {df[target_col].unique()}")
     print(f"Features: {feature_cols}")
 
-    print("\nDiscretising continuous features:")
+    n_buckets = 4
+    bucket_labels = [f"q{i + 1}" for i in range(n_buckets)]
+    print(f"\nDiscretising features into {n_buckets} "
+          f"equal-frequency quantile buckets:")
+
     for col in feature_cols:
-        unique_vals = np.sort(df[col].unique())
-        best_ig = -1
-        best_thresh = None
-
-        for i in range(len(unique_vals) - 1):
-            thresh = (unique_vals[i] + unique_vals[i + 1]) / 2.0
-            temp = df[col].apply(lambda x: 'low' if x <= thresh else 'high')
-            temp_df = pd.DataFrame({col: temp})
-            ig = information_gain(temp_df, df[target_col], col)
-            if ig > best_ig:
-                best_ig = ig
-                best_thresh = thresh
-
-        df[col] = df[col].apply(
-            lambda x: 'low' if x <= best_thresh else 'high'
-        )
-        print(f"  {col:<20} threshold={best_thresh:.3f}  IG={best_ig:.4f}")
+        try:
+            df[col] = pd.qcut(
+                df[col], n_buckets, labels=bucket_labels,
+            ).astype(str)
+            used_labels = bucket_labels
+        except ValueError:
+            # Duplicate quantile boundaries collapse the requested label
+            # count — fall back to integer codes and use whatever bins
+            # ``qcut`` produces.
+            df[col] = pd.qcut(
+                df[col], n_buckets, labels=False, duplicates='drop',
+            ).astype(str)
+            used_labels = sorted(df[col].unique().tolist())
+        print(f"  {col:<20}  ->  {len(used_labels)} buckets: {used_labels}")
 
     df_shuffled = df.sample(frac=1, random_state=42).reset_index(drop=True)
     split = int(0.8 * len(df_shuffled))
@@ -197,11 +245,11 @@ def _print_node_iris(tree: dict, prefix: str, is_last: bool, depth: int) -> None
     child_pfx = prefix + ("    " if is_last else "│   ")
 
     if tree['is_leaf']:
-        print(f"{prefix}{connector}🍃 {tree['label']}")
+        print(f"{prefix}{connector}LEAF: {tree['label']}")
         return
 
     majority = tree['majority']
-    print(f"{prefix}{connector}📦 [{tree['feature']}]  (majority: {majority})")
+    print(f"{prefix}{connector}[{tree['feature']}]  (majority: {majority})")
 
     children_items = list(tree['children'].items())
     for i, (val, child) in enumerate(children_items):
@@ -264,7 +312,7 @@ def inspect_dataset(csv_path: str) -> tuple[pd.DataFrame, str, pd.Series, list]:
         pct = count / valid.sum() * 100 if valid.sum() > 0 else 0
         move_type = "DROP" if move < 7 else "POP"
         col = move if move < 7 else move - 7
-        marker = "⚠️" if count == 0 else " "
+        marker = "!" if count == 0 else " "
         print(f"{marker} {move:<4}  {move_type} col {col:<5} {count:10,d} {pct:7.2f}%")
 
     if missing_classes:
@@ -343,7 +391,7 @@ def balance_classes(
             col_n = move_int if move_int < 7 else move_int - 7
             print(f"  {move_int:<4}  "
                   f"{'DROP' if move_int < 7 else 'POP'} col {col_n}"
-                  f"   {0:>10,}  {0:>10,}  ⚠️ missing")
+                  f"   {0:>10,}  {0:>10,}  missing")
             continue
 
         sampled = subset.sample(n=min(before_count, cap), random_state=random_state)
@@ -412,7 +460,12 @@ def split_dataset(
     move_col: str,
     random_state: int = 42,
 ) -> tuple:
-    """Stratified split: 80% train+val, 20% test; then 90/10 of train+val."""
+    """Stratified split: nested two-step.
+
+    First split: 80% train+val / 20% test.
+    Second split (on the 80%): 90/10 of train+val.
+    Final proportions of the original dataset: 72% train, 8% val, 20% test.
+    """
     X = df_balanced.drop(columns=[move_col])
     y = df_balanced[move_col]
 
@@ -470,7 +523,7 @@ def bin_features(
 
     for col in continuous_cols:
         if col not in POPOUT_BIN_DEFINITIONS:
-            print(f"  ⚠️  No bin definition for '{col}' — skipping")
+            print(f"  No bin definition for '{col}' — skipping")
             continue
 
         bins = POPOUT_BIN_DEFINITIONS[col]['bins']
@@ -521,7 +574,7 @@ def tune_pruning(
             preset_depth = 15
             preset_min_samples = 20
 
-        print(f"\n⏭️  SKIPPING grid search (using pre-computed values)")
+        print(f"\nSkipping grid search (using pre-computed values)")
         print(f"   max_depth   = {preset_depth}")
         print(f"   min_samples = {preset_min_samples}")
         print("\n   To re-run tuning, use: tune_pruning(skip=False)")
@@ -620,7 +673,7 @@ def train_final_tree(
     actual_depth = tree_depth(tree)
     root_feature = tree.get('feature', 'N/A — root is leaf')
 
-    print(f"\n✅ Training complete in {elapsed:.1f}s")
+    print(f"\nTraining complete in {elapsed:.1f}s")
     print(f"\nTree statistics:")
     print(f"  Total nodes    : {total_nodes:,}")
     print(f"  Leaf nodes     : {total_leaves:,}")
@@ -652,20 +705,20 @@ def _print_node(
         label = int_to_move(tree['label'])
         majority = int_to_move(tree['majority'])
         print(f"{prefix}{connector}"
-              f"🍃 LEAF → {label:<12} (majority: {majority})")
+              f"LEAF → {label:<12} (majority: {majority})")
         return
 
     if depth >= max_display:
         majority = int_to_move(tree['majority'])
         n_children = len(tree['children'])
         print(f"{prefix}{connector}"
-              f"📦 [{tree['feature']}]  "
-              f"({n_children} branches, majority: {majority})  ···")
+              f"[{tree['feature']}]  "
+              f"({n_children} branches, majority: {majority})  ...")
         return
 
     majority = int_to_move(tree['majority'])
     print(f"{prefix}{connector}"
-          f"📦 SPLIT [{tree['feature']}]  (majority: {majority})")
+          f"SPLIT [{tree['feature']}]  (majority: {majority})")
 
     children_items = list(tree['children'].items())
     for i, (val, child) in enumerate(children_items):
@@ -753,7 +806,7 @@ def evaluate(tree: dict, X_test: pd.DataFrame, y_test: pd.Series) -> dict:
         correct = (y_pred[mask] == cls).sum()
         acc = correct / total * 100
         move_type = "DROP" if cls < 7 else "POP "
-        marker = "⚠️" if acc < 20 else ""
+        marker = "!" if acc < 20 else ""
         print(f"  {cls:<3}  {int_to_move(cls):<12} {correct:>8,} {total:>8,} "
               f"{acc:>7.1f}%  {move_type} {marker}")
         class_results[cls] = {'correct': correct, 'total': total, 'acc': acc}
@@ -942,6 +995,196 @@ def evaluate_quiet(
         'n_correct': n_correct,
         'n_total': n_total,
     }
+
+
+# ---------------------------------------------------------------------------
+# Top-k accuracy, feature importance, and REP post-pruning
+# ---------------------------------------------------------------------------
+
+
+def top_k_accuracy(y_true, X: pd.DataFrame, tree: dict, k: int = 3) -> float:
+    """Fraction of rows where the true class is in the tree's top-``k``.
+
+    For each row, asks :func:`ai.id3.predict_top_k` for the top-``k``
+    leaf classes (ordered by leaf ``class_counts`` descending) and counts
+    the row as correct when ``y_true`` is in that list. Returns a float
+    in ``[0, 1]``; ``k=1`` is equivalent to the standard accuracy.
+
+    Relevant for PopOut because MCTS frequently has 2-3 near-equivalent
+    moves at any given state — top-3 is the honest metric for "did the
+    tree learn the right region of move space" while top-1 over-penalises
+    swapping between near-equivalent labels.
+
+    Leaves missing ``class_counts`` (older pickles) fall back to a
+    length-1 prediction list, so top-k on them is identical to top-1 —
+    the metric never crashes on backwards-compatible trees.
+    """
+    y_arr = np.asarray(y_true.values if hasattr(y_true, 'values') else y_true)
+    n_total = len(y_arr)
+    if n_total == 0:
+        return 0.0
+
+    cols = X.columns.tolist()
+    n_correct = 0
+    for i, row_tuple in enumerate(X.itertuples(index=False)):
+        row = pd.Series(row_tuple, index=cols)
+        preds = predict_top_k(row, tree, k=k)
+        if y_arr[i] in preds:
+            n_correct += 1
+    return n_correct / n_total
+
+
+def feature_importance(tree: dict) -> pd.DataFrame:
+    """Per-feature usage stats for ``tree``.
+
+    Walks all internal nodes and records, for each split feature:
+
+    * ``n_splits``        — count of internal nodes that split on it,
+    * ``n_samples_total`` — sum of training rows that flowed through
+                            those nodes (read from each node's
+                            ``n_samples`` field; missing values count as
+                            zero for backwards compatibility with older
+                            pickles).
+
+    Returned DataFrame is sorted by ``n_samples_total`` descending.
+    A feature near the root with N samples is more "important" than one
+    that appears only inside a tiny subtree, even if the latter is
+    referenced more often — hence the sample-weighted ranking.
+    """
+    stats: dict = {}
+
+    def _walk(node: dict) -> None:
+        if node['is_leaf']:
+            return
+        feat = node['feature']
+        slot = stats.setdefault(feat, {'n_splits': 0, 'n_samples_total': 0})
+        slot['n_splits'] += 1
+        slot['n_samples_total'] += int(node.get('n_samples', 0))
+        for child in node['children'].values():
+            _walk(child)
+
+    _walk(tree)
+
+    if not stats:
+        return pd.DataFrame(columns=['feature', 'n_splits', 'n_samples_total'])
+
+    rows = [
+        {'feature': f, 'n_splits': s['n_splits'],
+         'n_samples_total': s['n_samples_total']}
+        for f, s in stats.items()
+    ]
+    df = pd.DataFrame(rows)
+    return df.sort_values(
+        'n_samples_total', ascending=False,
+    ).reset_index(drop=True)
+
+
+def _aggregate_class_counts(subtree: dict) -> dict:
+    """Sum ``class_counts`` across every leaf in ``subtree``.
+
+    Used when REP collapses an internal node into a leaf — the pruned
+    leaf inherits the union of class counts of all the leaves it
+    absorbed, so :func:`predict_top_k` continues to work on the pruned
+    tree without falling back to length-1 predictions.
+    """
+    if subtree['is_leaf']:
+        return dict(subtree.get('class_counts', {}))
+    agg: dict = {}
+    for child in subtree['children'].values():
+        for cls, cnt in _aggregate_class_counts(child).items():
+            agg[cls] = agg.get(cls, 0) + cnt
+    return agg
+
+
+def _prune_rep_recursive(
+    node: dict,
+    X: pd.DataFrame,
+    y: np.ndarray,
+) -> tuple[dict, int]:
+    """Bottom-up REP body. Returns ``(possibly-pruned-node, n_correct)``.
+
+    ``n_correct`` is the count of rows in ``(X, y)`` correctly classified
+    by the (possibly-pruned) subtree rooted at ``node``, mirroring the
+    exact row-routing logic of :func:`predict_batch` (descend by feature
+    value, fall back to the current node's ``majority`` when the value
+    has no matching child).
+    """
+    if node['is_leaf']:
+        return node, int((y == node['label']).sum())
+
+    feat = node['feature']
+    majority = node['majority']
+    feat_values = X[feat]
+
+    new_children: dict = {}
+    subtree_correct = 0
+    for child_val, child in node['children'].items():
+        mask = (feat_values == child_val).values
+        sub_X = X.iloc[mask]
+        sub_y = y[mask]
+        new_child, child_correct = _prune_rep_recursive(child, sub_X, sub_y)
+        new_children[child_val] = new_child
+        subtree_correct += child_correct
+
+    # Rows whose feature value matches no child take the ``predict_batch``
+    # fallback path: predicted = current node's majority.
+    seen_vals = set(node['children'].keys())
+    unseen_mask = (~feat_values.isin(seen_vals)).values
+    if unseen_mask.any():
+        subtree_correct += int((y[unseen_mask] == majority).sum())
+
+    leaf_correct = int((y == majority).sum())
+
+    if leaf_correct >= subtree_correct:
+        return (
+            {
+                'is_leaf': True,
+                'label': majority,
+                'majority': majority,
+                'class_counts': _aggregate_class_counts(node),
+            },
+            leaf_correct,
+        )
+
+    pruned_node: dict = {
+        'is_leaf': False,
+        'feature': feat,
+        'majority': majority,
+        'children': new_children,
+    }
+    if 'n_samples' in node:
+        pruned_node['n_samples'] = node['n_samples']
+    return pruned_node, subtree_correct
+
+
+def prune_rep(
+    tree: dict,
+    X_val: pd.DataFrame,
+    y_val: pd.Series,
+) -> dict:
+    """Reduced-error post-pruning.
+
+    Bottom-up single pass: for each internal node, compare validation
+    accuracy of the subtree as-is against the accuracy of replacing the
+    node with a leaf predicting its training-time ``majority``. Replace
+    when ``leaf_acc >= subtree_acc`` — by construction this never makes
+    val accuracy worse than the unpruned tree, and ties go to the
+    smaller tree.
+
+    A single bottom-up pass is sufficient: once a subtree is collapsed
+    to a leaf, it cannot be pruned further within this call, and the
+    parent's decision uses the already-pruned child counts. The input
+    ``tree`` is not mutated; a deep-copied pruned tree is returned.
+
+    The row-routing logic matches :func:`predict_batch` exactly — rows
+    with a feature value missing from a node's children fall back to
+    that node's ``majority`` rather than crashing.
+    """
+    y_arr = np.asarray(y_val.values if hasattr(y_val, 'values') else y_val)
+    X = X_val.reset_index(drop=True)
+    work = copy.deepcopy(tree)
+    pruned, _ = _prune_rep_recursive(work, X, y_arr)
+    return pruned
 
 
 # ---------------------------------------------------------------------------

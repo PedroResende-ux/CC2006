@@ -1,0 +1,17 @@
+{
+  "_comment": "Smoke-test config demonstrating the new player-type schema. The DT player loads a pickled ID3 tree (path resolved relative to the project root) and the Random player needs no fields beyond its type. Backwards compat: omitting 'type' still defaults to 'mcts' so every pre-existing tournament JSON keeps working. Real DT-vs-MCTS configs live alongside this file under scripts/tournament_configs/.",
+  "default_games": 6,
+  "matchups": [
+    {
+      "name": "dt_vs_random_smoke",
+      "player_a": {
+        "type": "dt",
+        "tree_pickle": "data/id3/id3_tree.pkl"
+      },
+      "player_b": {
+        "type": "random"
+      },
+      "games": 6
+    }
+  ]
+}

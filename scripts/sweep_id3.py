@@ -15,7 +15,7 @@ Usage::
 
     python -m scripts.sweep_id3 \\
         --workers 16 \\
-        --output-dir data \\
+        --output-dir data/sweeps \\
         --report _audits/sweep_results.md
 
 The two dataset paths are hard-coded (project constants, not knobs):
@@ -159,7 +159,7 @@ def _prepare_pickle(
     cap: Optional[int],
     out_path: Path,
 ) -> tuple[int, int]:
-    """Balance + stratified-split (80/10/10) + bin → pickle on disk.
+    """Balance + stratified-split (72/8/20, nested) + bin → pickle on disk.
 
     The parent does this once per ``(dataset, cap)`` pair, before any
     workers are launched, so that workers only need to load the prepared
@@ -417,7 +417,7 @@ def _build_report(
                  f"{wallclock_total:.1f}s total. {bottleneck_summary}")
     lines.append("")
     lines.append("This report is the **primary deliverable** of Prompt D1. "
-                 "The CSV/PNG artefacts under `data/sweep_*.{csv,png}` are "
+                 "The CSV/PNG artefacts under `data/sweeps/sweep_*.{csv,png}` are "
                  "raw evidence; the methodological recommendation in "
                  "§5 and the audit smells in §7 are the load-bearing parts.")
     lines.append("")
@@ -457,9 +457,10 @@ def _build_report(
     lines.append("")
     lines.append(f"- `seed = {SEED}` (controls balance sampling, "
                  "stratified split, all permutations).")
-    lines.append("- **Split:** stratified 80/10/10 train/val/test "
+    lines.append("- **Split:** stratified 72/8/20 train/val/test "
                  "(via `stratified_split` in `ai/dt_pipeline.py` — "
-                 "80% train+val + 20% test, then 90/10 of train+val).")
+                 "nested: first 80% train+val + 20% test, then 90/10 of "
+                 "the 80% gives the final 72/8/20).")
     lines.append("- **Bins:** the hand-designed `POPOUT_BIN_DEFINITIONS` "
                  "constants for `move_count`, `own_pieces_bottom_row`, "
                  "`opp_pieces_bottom_row`. Identical across all 52 trees.")
@@ -476,8 +477,8 @@ def _build_report(
                  "low-variance estimate. K-fold would multiply the sweep "
                  "wallclock by k× without changing the relative ranking "
                  "we use to pick `(cap*, depth*, min_samples*)`. K-fold is "
-                 "explicitly Prompt E3's job, applied to the final two "
-                 "trees only.")
+                 "explicitly the final-evaluation phase's job, applied to "
+                 "the final two trees only.")
     lines.append("")
     lines.append("### Metric choice")
     lines.append("")
@@ -851,8 +852,9 @@ def _build_report(
         "  1. The val accuracy/macro-F1 numbers in this report are "
         "**upper bounds on what a DTPlayer will achieve in live play** "
         "(where the input distribution is the unbalanced game-state "
-        "distribution). The DTPlayer evaluation in Prompt E3 will "
-        "naturally produce lower numbers; this is not a regression."
+        "distribution). The DTPlayer evaluation in the final-evaluation "
+        "phase will naturally produce lower numbers; this is not a "
+        "regression."
     )
     lines.append("")
     lines.append(
@@ -1304,8 +1306,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("data"),
-        help="directory for sweep_*.csv and sweep_*.png (default: data/)",
+        default=Path("data/sweeps"),
+        help="directory for sweep_*.csv and sweep_*.png (default: data/sweeps/)",
     )
     p.add_argument(
         "--report",

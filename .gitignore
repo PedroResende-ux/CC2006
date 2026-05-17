@@ -1,26 +1,24 @@
-# Python
+# Python bytecode
 __pycache__/
 *.pyc
 
-# pytest
+# pytest cache
 .pytest_cache/
 
-# Numba JIT cache
+# Numba JIT cache (regenerated on first import of ai.rollout_numba)
 *.nbi
 *.nbc
 
-# Jupyter
+# Jupyter checkpoints
 .ipynb_checkpoints/
 
-# Generated datasets (regenerable via scripts/generate_dataset.py)
-data/*.csv
-!data/iris.csv
-data/_log_*.txt
-data/Agrupar/
-_audits/sweep_run.log
-data/sweep_*.csv
-data/sweep_*.png
+# Large source datasets — too big for git; regenerable via scripts/generate_dataset.py
+data/popout_200k.csv
+data/popout_dataset_150k.csv
 
-# Claude Code local config and internal spec
+# Claude Code local config (not part of the submission)
 .claude/
 CLAUDE.md
+
+# Debug log from an aborted sweep run
+_audits/sweep_run.log

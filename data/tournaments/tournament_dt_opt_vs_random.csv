@@ -1,0 +1,2 @@
+matchup_name,total_games,a_wins,b_wins,draws,a_wins_as_p1,a_wins_as_p2,b_wins_as_p1,b_wins_as_p2,draws_p1_was_a,draws_p1_was_b,a_winrate,b_winrate,draw_rate,wallclock_s,config_a,config_b
+dt_optimised_pruned_vs_random,500,491,9,0,248,243,7,2,0,0,0.982,0.018,0.0,0.0,"{""tree_pickle"": ""data/id3_tree_optimised_pruned.pkl"", ""type"": ""dt""}","{""type"": ""random""}"

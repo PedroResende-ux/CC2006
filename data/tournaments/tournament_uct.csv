@@ -1,0 +1,2 @@
+matchup_name,total_games,a_wins,b_wins,draws,a_wins_as_p1,a_wins_as_p2,b_wins_as_p1,b_wins_as_p2,draws_p1_was_a,draws_p1_was_b,a_winrate,b_winrate,draw_rate,wallclock_s,config_a,config_b
+ucb1_vs_ucb1_tuned,100,40,60,0,29,11,39,21,0,0,0.4,0.6,0.0,0.0,"{""exploration_weight"": 1.4142135624, ""iterations"": 1000, ""num_children_to_expand"": 1, ""rollout_depth_limit"": 80, ""uct_variant"": ""ucb1""}","{""exploration_weight"": 1.4142135624, ""iterations"": 1000, ""num_children_to_expand"": 1, ""rollout_depth_limit"": 80, ""uct_variant"": ""ucb1_tuned""}"

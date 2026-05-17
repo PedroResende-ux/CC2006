@@ -8,7 +8,7 @@ aggregated results.
 Usage:
     python -m scripts.run_tournament scripts/tournament_configs/iterations_sweep.json \\
         --workers 16 \\
-        --out data/tournament_iterations.csv
+        --out data/tournaments/tournament_iterations.csv
 
 The per-matchup ``wallclock_s`` column in the CSV is set to ``0.0`` so
 that the output is byte-deterministic for the same ``(config, base-seed,
@@ -37,22 +37,35 @@ _PROJECT_ROOT = _THIS_FILE.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from ai.dt_player import DTPlayer  # noqa: E402
 from ai.mcts import MCTS  # noqa: E402
 from game.game import PopOutGame  # noqa: E402
-from game.player import Player  # noqa: E402
+from game.player import Player, RandomPlayer  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
 
-REQUIRED_PLAYER_FIELDS: tuple[str, ...] = (
+# Player type registry. Configs default to ``"mcts"`` when ``"type"`` is
+# absent so every pre-existing tournament JSON keeps working unchanged.
+VALID_PLAYER_TYPES: tuple[str, ...] = ("mcts", "dt", "random")
+DEFAULT_PLAYER_TYPE: str = "mcts"
+
+REQUIRED_MCTS_FIELDS: tuple[str, ...] = (
     "iterations",
     "exploration_weight",
     "rollout_depth_limit",
     "num_children_to_expand",
     "uct_variant",
 )
+
+REQUIRED_DT_FIELDS: tuple[str, ...] = (
+    "tree_pickle",
+)
+
+# Back-compat alias — external tooling may still reference this name.
+REQUIRED_PLAYER_FIELDS: tuple[str, ...] = REQUIRED_MCTS_FIELDS
 
 CSV_HEADER: list[str] = [
     "matchup_name",
@@ -104,6 +117,65 @@ class _MCTSConfiguredPlayer(Player):
         return self._engine.search(board)
 
 
+def _resolve_tree_path(rel_or_abs: str) -> Path:
+    """Resolve a tree-pickle path relative to the project root when needed.
+
+    Absolute paths are returned as-is. Relative paths are joined to
+    :data:`_PROJECT_ROOT` so that tournament configs are portable: the
+    same JSON works whether the user invokes
+    ``python -m scripts.run_tournament`` from the repo root or from
+    anywhere else.
+    """
+    p = Path(rel_or_abs)
+    if p.is_absolute():
+        return p
+    return _PROJECT_ROOT / p
+
+
+class _DTConfiguredPlayer(Player):
+    """:class:`Player` adapter that drives PopOutGame via a trained DT.
+
+    Wraps :class:`ai.dt_player.DTPlayer` so the tournament runner can
+    treat MCTS and DT players uniformly through :func:`_make_player`.
+    Path resolution and naming live here so :class:`DTPlayer` itself
+    stays portable across non-tournament uses (notebook demos, CLI).
+    """
+
+    def __init__(self, player_id: int, config: dict[str, Any], seed: int) -> None:
+        super().__init__(player_id, "DT")
+        tree_path = _resolve_tree_path(str(config["tree_pickle"]))
+        fallback = str(config.get("fallback_strategy", "nearest"))
+        self._player: DTPlayer = DTPlayer(
+            player_id=player_id,
+            tree_path=str(tree_path),
+            name="DT",
+            fallback_strategy=fallback,  # type: ignore[arg-type]
+            random_seed=seed,
+        )
+
+    def choose_move(self, board):
+        return self._player.choose_move(board)
+
+
+def _make_player(player_id: int, config: dict[str, Any], seed: int) -> Player:
+    """Factory: build the right Player subclass for ``config["type"]``.
+
+    Dispatches on ``config.get("type", "mcts")`` so legacy configs
+    (no ``"type"`` field) continue to instantiate MCTS players exactly
+    as before. The per-game ``seed`` is forwarded uniformly so all
+    player types share the existing deterministic seeding lineage.
+    """
+    ptype = str(config.get("type", DEFAULT_PLAYER_TYPE))
+    if ptype == "mcts":
+        return _MCTSConfiguredPlayer(player_id, config, seed)
+    if ptype == "dt":
+        return _DTConfiguredPlayer(player_id, config, seed)
+    if ptype == "random":
+        return RandomPlayer(player_id, name="Random", seed=seed)
+    # Unreachable: _validate_player_config rejects unknown types upstream.
+    raise SystemExit(f"error: unknown player type {ptype!r}")
+
+
 def play_one_game(work_item: tuple) -> dict:
     """Worker: play one game and return a result record.
 
@@ -130,12 +202,12 @@ def play_one_game(work_item: tuple) -> dict:
 
     started = time.monotonic()
     if a_starts_p1:
-        p1 = _MCTSConfiguredPlayer(1, player_a_config, seed)
-        p2 = _MCTSConfiguredPlayer(2, player_b_config, seed)
+        p1 = _make_player(1, player_a_config, seed)
+        p2 = _make_player(2, player_b_config, seed)
         a_was = "p1"
     else:
-        p1 = _MCTSConfiguredPlayer(1, player_b_config, seed)
-        p2 = _MCTSConfiguredPlayer(2, player_a_config, seed)
+        p1 = _make_player(1, player_b_config, seed)
+        p2 = _make_player(2, player_a_config, seed)
         a_was = "p2"
 
     winner = PopOutGame(p1, p2, verbose=False, max_moves=400).play()
@@ -178,16 +250,44 @@ def _load_config(path: Path) -> dict:
 
 
 def _validate_player_config(cfg: Any, where: str) -> dict:
+    """Validate a per-player config block.
+
+    Dispatches on the ``"type"`` field (default: ``"mcts"``) so configs
+    written for the original MCTS-only schema validate exactly as before.
+    """
     if not isinstance(cfg, dict):
         raise SystemExit(f"error: {where}: must be a JSON object")
-    missing = [f for f in REQUIRED_PLAYER_FIELDS if f not in cfg]
-    if missing:
-        raise SystemExit(f"error: {where}: missing required field(s) {missing}")
-    if cfg["uct_variant"] not in ("ucb1", "ucb1_tuned"):
+
+    ptype = cfg.get("type", DEFAULT_PLAYER_TYPE)
+    if ptype not in VALID_PLAYER_TYPES:
         raise SystemExit(
-            f"error: {where}: uct_variant must be 'ucb1' or 'ucb1_tuned', "
-            f"got {cfg['uct_variant']!r}"
+            f"error: {where}: unknown player type {ptype!r}; "
+            f"must be one of {VALID_PLAYER_TYPES}"
         )
+
+    if ptype == "mcts":
+        missing = [f for f in REQUIRED_MCTS_FIELDS if f not in cfg]
+        if missing:
+            raise SystemExit(
+                f"error: {where}: missing required mcts field(s) {missing}"
+            )
+        if cfg["uct_variant"] not in ("ucb1", "ucb1_tuned"):
+            raise SystemExit(
+                f"error: {where}: uct_variant must be 'ucb1' or 'ucb1_tuned', "
+                f"got {cfg['uct_variant']!r}"
+            )
+    elif ptype == "dt":
+        missing = [f for f in REQUIRED_DT_FIELDS if f not in cfg]
+        if missing:
+            raise SystemExit(
+                f"error: {where}: missing required dt field(s) {missing}"
+            )
+        if not isinstance(cfg["tree_pickle"], str) or not cfg["tree_pickle"]:
+            raise SystemExit(
+                f"error: {where}: 'tree_pickle' must be a non-empty string"
+            )
+    # "random" has no required fields — the seed comes from
+    # ``_seed_for(base_seed, matchup_idx, game_idx)``.
     return cfg
 
 
@@ -469,7 +569,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "output CSV path "
-            "(default: data/tournament_<config_basename>.csv)"
+            "(default: data/tournaments/tournament_<config_basename>.csv)"
         ),
     )
     p.add_argument(
@@ -514,7 +614,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     out_path = args.out
     if out_path is None:
-        out_path = _PROJECT_ROOT / "data" / f"tournament_{args.config.stem}.csv"
+        out_path = _PROJECT_ROOT / "data" / "tournaments" / f"tournament_{args.config.stem}.csv"
     out_path = Path(out_path)
     if out_path.exists():
         raise SystemExit(
