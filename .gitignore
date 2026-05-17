@@ -16,6 +16,10 @@ __pycache__/
 data/*.csv
 !data/iris.csv
 data/_log_*.txt
+data/Agrupar/
+_audits/sweep_run.log
+data/sweep_*.csv
+data/sweep_*.png
 
 # Claude Code local config and internal spec
 .claude/
