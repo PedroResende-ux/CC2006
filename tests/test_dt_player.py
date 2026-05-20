@@ -192,7 +192,7 @@ def test_dtplayer_beats_random(dt_tree_pickle: str) -> None:
 
     This is a sanity check on the end-to-end integration, not an
     evaluation — the real DT-vs-baseline tournament happens on a
-    separate machine via the prompt E3 configs.
+    separate machine via the tournament configs.
     """
     n_games = 30
     dt_wins = 0

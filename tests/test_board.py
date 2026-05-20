@@ -181,7 +181,7 @@ def test_detect_diagonal_down_right_win() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Special pop rule (rule 1 from CLAUDE.md)
+# Special pop rule (rule 1 from README.md)
 # ---------------------------------------------------------------------------
 
 

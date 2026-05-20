@@ -84,7 +84,7 @@ def _check_winner(board: np.ndarray, last_move_player: int) -> int:
     """Return 1 if P1 has 4-in-a-row, 2 if P2 does, 0 otherwise.
 
     When both players have 4-in-a-row (only possible after a pop) the
-    winner is ``last_move_player`` — PopOut rule 1 in ``CLAUDE.md``.
+    winner is ``last_move_player`` — PopOut rule 1 in ``README.md``.
     """
     p1 = _has_four(board, 1)
     p2 = _has_four(board, 2)

@@ -351,7 +351,7 @@ def test_numba_rollout_is_at_least_5x_faster() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tests for num_children_to_expand and uct_variant (Prompt E1)
+# Tests for num_children_to_expand and uct_variant
 # ---------------------------------------------------------------------------
 
 

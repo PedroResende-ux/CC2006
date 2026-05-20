@@ -20,7 +20,6 @@ Final project for the Artificial Intelligence course, FCUP, 2025/2026.
 - A tournament runner for head-to-head comparisons between MCTS and DT configurations, with Wilson 95% confidence intervals.
 - A `play.py` CLI that lets any combination of {human, MCTS, DT, random} face each other.
 - A Jupyter notebook coordinating all experiments, results, and analysis. **This is the main deliverable.**
-- Three audit reports under `_audits/` documenting the methodology and findings.
 - A LaTeX presentation under `slides/` (PDF compiled from Beamer).
 
 ---
@@ -56,10 +55,6 @@ Final project for the Artificial Intelligence course, FCUP, 2025/2026.
 │   ├── tournaments/            All tournament result CSVs
 │   ├── sweeps/                 D1 sweep CSVs + plots
 │   └── id3/                    Trained trees, CV scores, confusion matrices, etc.
-├── _audits/                    Methodology and result reports (Markdown)
-│   ├── id3_audit.md
-│   ├── sweep_results.md        D1 sweep findings
-│   └── evaluation_results.md   Final ID3 evaluation findings
 ├── notebook.ipynb              Main deliverable
 ├── presentation.pdf            Slides for the oral presentation
 ├── requirements.txt
@@ -125,10 +120,10 @@ python -m scripts.generate_dataset --iter 20000 --c 2.0 --num-children 1 --uct u
     --num-games 150000 --output data/popout_dataset_150k.csv
 
 # 2. ID3 hyperparameter sweep over both datasets (~1-2 h on 24 cores)
-python -m scripts.sweep_id3 --workers 24 --output-dir data/sweeps --report _audits/sweep_results.md
+python -m scripts.sweep_id3 --workers 24 --output-dir data/sweeps
 
 # 3. Final ID3 evaluation: train 4 trees, 5-fold CV, 3 tournaments (~45 min on 24 cores)
-python -m scripts.evaluate_id3 --workers 24 --output-dir data/id3 --report _audits/evaluation_results.md
+python -m scripts.evaluate_id3 --workers 24 --output-dir data/id3
 ```
 
 ### Run the tests
@@ -155,5 +150,3 @@ A short summary of the main results documented in the notebook and the audit rep
 - **Non-transitivity between UCB1 and UCB1-Tuned.** UCB1-Tuned beats the baseline MCTS more often than UCB1 does (70% vs 66%), yet UCB1 wins the direct head-to-head 60-40 / 237-163 (N=400).
 - **A stronger MCTS does not produce a better imitation-learning decision tree.** The DT trained on the optimised MCTS dataset loses 0-200 (every game, both sides) head-to-head against the DT trained on the baseline MCTS dataset, despite the optimised MCTS winning 66-34 against the baseline MCTS.
 - **Classification accuracy ≠ playing strength.** All four trained trees have cross-validated macro-F1 within 1 p.p., but tournament outcomes differ by orders of magnitude.
-
-See `_audits/sweep_results.md` and `_audits/evaluation_results.md` for the supporting tables and discussion.

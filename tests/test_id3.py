@@ -37,7 +37,7 @@ def test_run_iris_demo_after_fix(capsys):
     ~66.7%: it perfectly isolated setosa but reduced every other feature
     to a binary indicator that could not distinguish versicolor from
     virginica. After replacing it with 4-bucket equal-frequency quantile
-    binning (Prompt E2 Part 4), the demo clears the canonical >= 90%
+    binning (post-refactor), the demo clears the canonical >= 90%
     sanity-check threshold consistently — empirically ~93%.
     """
     # Import lazily so a broken pipeline doesn't sink the other tests.
@@ -122,7 +122,7 @@ def test_predict_top_k_backwards_compat():
 
 
 def test_id3_leaves_carry_class_counts():
-    """After Prompt E2 Part 1, every leaf has ``class_counts`` matching its partition."""
+    """every leaf has ``class_counts`` matching its partition."""
     X = pd.DataFrame({
         'colour': ['red', 'red', 'blue', 'blue', 'blue'],
     })

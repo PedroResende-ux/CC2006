@@ -58,7 +58,7 @@ def test_confusion_matrix_diagonal():
 
 
 def test_bin_features_no_nan_strings_across_full_domain():
-    """After Prompt E2 Part 0, ``bin_features`` covers the full count range.
+    """``bin_features`` covers the full count range.
 
     The pre-fix bins had upper bound ``6`` on ``own/opp_pieces_bottom_row``
     (board width is 7 → counts in [0, 7]) and ``60`` on ``move_count``

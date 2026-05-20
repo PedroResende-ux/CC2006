@@ -76,7 +76,7 @@ def _has_four_pattern(mask: np.ndarray) -> bool:
 def _fast_check_winner(state: PopOutBoard) -> Optional[int]:
     """Equivalent to :meth:`PopOutBoard.check_winner` but ~2x faster.
 
-    Honours the "popper wins" tiebreaker (``rule 1`` in ``CLAUDE.md``)
+    Honours the "popper wins" tiebreaker (``rule 1`` in ``README.md``)
     via the engine's public :attr:`PopOutBoard.last_move_player` accessor.
     """
     board = state.board

@@ -1,7 +1,7 @@
 """PopOut board module.
 
 Defines :class:`PopOutBoard`, which models the full state of a PopOut game
-(Connect-4 variant with a "pop" move). See ``CLAUDE.md`` for the game rules.
+(Connect-4 variant with a "pop" move). See ``README.md`` for the game rules.
 
 The board is represented as a 6x7 NumPy array where:
 
@@ -123,7 +123,7 @@ class PopOutBoard:
 
         When both players end up with a four-in-a-row simultaneously — which
         can only happen after a pop — the player who made the last move wins
-        (see rule 1 in ``CLAUDE.md``).
+        (see rule 1 in ``README.md``).
         """
         p1_wins = self._has_four_in_a_row(PLAYER_1)
         p2_wins = self._has_four_in_a_row(PLAYER_2)
